@@ -5,6 +5,12 @@ import cv2
 import os
 import random
 
+def select_random_matches(matches, num_samples=50):
+    # Ensure you don't try to sample more matches than exist
+    num_samples = min(len(matches), num_samples)
+    selected_matches = np.random.choice(matches, num_samples, replace=False)
+    return selected_matches
+
 def load_data(data_dir):
     # Load the first image
     img1 = cv2.imread(os.path.join(data_dir, 'I1.png'))
@@ -35,6 +41,20 @@ def find_interest_points(img):
     
     return kp, des
 
+def validate_epipolar_constraint(pts1, pts2, F):
+    ones = np.ones((pts1.shape[0], 1))
+    pts1_hom = np.hstack([pts1, ones])  # Convert to homogeneous coordinates
+    pts2_hom = np.hstack([pts2, ones])
+
+    # Compute the epipolar lines for pts1
+    lines = np.dot(F, pts1_hom.T).T  # Nx3
+
+    # Evaluate the epipolar constraint: pts2_hom * line = 0
+    errors = np.abs(np.sum(lines * pts2_hom, axis=1))
+    return errors
+
+
+
 def visualize_interest_points(img1, img2, kp1, kp2):
     # Create a copy of the images to draw the keypoints on
     img1_kp = cv2.drawKeypoints(img1, kp1, None, color=(0, 0, 255))
@@ -50,9 +70,62 @@ def visualize_interest_points(img1, img2, kp1, kp2):
     plt.xlabel('X')
     plt.ylabel('Y')
     plt.show()
+    
+def draw_epipolar_lines(img1, img2, pts1, pts2, F):
+    # Assuming pts1 and pts2 are the corresponding points in each image
+    # Find epilines corresponding to points in right image (second image) and
+    # drawing its lines on left image
+    lines1 = cv2.computeCorrespondEpilines(pts2.reshape(-1, 1, 2), 2, F)
+    lines1 = lines1.reshape(-1, 3)
+    img1_epilines = draw_lines_e(img1, lines1, pts1)
+    
+    # Find epilines corresponding to points in left image (first image) and
+    # drawing its lines on right image
+    lines2 = cv2.computeCorrespondEpilines(pts1.reshape(-1, 1, 2), 1, F)
+    lines2 = lines2.reshape(-1, 3)
+    img2_epilines = draw_lines_e(img2, lines2, pts2)
+
+    return img1_epilines, img2_epilines
+
+def draw_lines_e(img, lines, pts):
+    ''' img - image on which we draw the epilines for the points in img2
+        lines - corresponding epilines '''
+    r, c, _ = img.shape
+    for r, pt in zip(lines, pts):
+        color = tuple(np.random.randint(0, 255, 3).tolist())
+        x0, y0 = map(int, [0, -r[2]/r[1] ])
+        x1, y1 = map(int, [c, -(r[2]+r[0]*c)/r[1] ])
+        img = cv2.line(img, (int(x0), int(y0)), (int(x1), int(y1)), color, 1)
+        # Ensure pt coordinates are integers
+        pt = (int(pt[0][0]), int(pt[0][1]))  # Corrected the point format here
+        img = cv2.circle(img, pt, 5, color, -1)
+    return img
+
+def draw_lines(img, lines, pts):
+    ''' img - image on which we draw the epilines for the points in img2
+        lines - corresponding epilines '''
+    r, c, _ = img.shape
+    for r, pt in zip(lines, pts):
+        color = tuple(np.random.randint(0, 255, 3).tolist())
+        x0, y0 = map(int, [0, -r[2]/r[1] ])
+        x1, y1 = map(int, [c, -(r[2]+r[0]*c)/r[1] ])
+        img = cv2.line(img, (x0, y0), (x1, y1), color, 1)
+        img = cv2.circle(img, tuple(pt[0]), 5, color, -1)
+    return img
  
+def draw_dotted_line(img, pt1, pt2, color, thickness=1, gap=5):
+    """Draw a dotted line in img from pt1 to pt2 with given color and thickness."""
+    dist = ((pt1[0] - pt2[0]) ** 2 + (pt1[1] - pt2[1]) ** 2) ** 0.5
+    points = []
+    for i in np.arange(0, dist, gap):
+        r = i / dist
+        x = int((pt1[0] * (1 - r) + pt2[0] * r) + 0.5)
+        y = int((pt1[1] * (1 - r) + pt2[1] * r) + 0.5)
+        points.append((x, y))
+    for point in points:
+        cv2.circle(img, point, thickness, color, -1)  # Draw filled circle (dot) at each point
+        
 def draw_custom_matches(img1, img2, kp1, kp2, matches):
-    # Create a blank image that will hold both images
     h1, w1, c1 = img1.shape
     h2, w2, c2 = img2.shape
     height = max(h1, h2)
@@ -61,20 +134,16 @@ def draw_custom_matches(img1, img2, kp1, kp2, matches):
     output_image[:h1, :w1] = img1
     output_image[:h2, w1:w1+w2] = img2
 
-    # Draw keypoints
     for match in matches:
-        # Get the matching keypoints for each of the images
         img1_idx = match.queryIdx
         img2_idx = match.trainIdx
         x1, y1 = kp1[img1_idx].pt
         x2, y2 = kp2[img2_idx].pt
         
-        # Draw keypoints
-        cv2.circle(output_image, (int(x1), int(y1)), 4, (0, 0, 255), 1, lineType=cv2.LINE_AA)  # Red in img1
-        cv2.circle(output_image, (int(x2 + w1), int(y2)), 4, (0, 255, 0), 1, lineType=cv2.LINE_AA)  # Green in img2
+        cv2.circle(output_image, (int(x1), int(y1)), 4, (0, 0, 255), 1, lineType=cv2.LINE_AA)
+        cv2.circle(output_image, (int(x2 + w1), int(y2)), 4, (0, 255, 0), 1, lineType=cv2.LINE_AA)
         
-        # Draw line connecting keypoints
-        cv2.line(output_image, (int(x1), int(y1)), (int(x2 + w1), int(y2)), (0, 255, 255), 1, lineType=cv2.LINE_AA)  # Yellow line
+        draw_dotted_line(output_image, (int(x1), int(y1)), (int(x2 + w1), int(y2)), (0, 255, 255), thickness=1, gap=5)
 
     return output_image
    
@@ -214,9 +283,16 @@ def main():
     visualize_matches(img1, img2, kp1, kp2, inlier_matches, color1=(0, 255, 0), color2=(0, 0, 255), title='Matched Interest Points with Lines (After Filtering)')
     
     # Visualize a random subset of inlier matches with epipolar lines
-    #visualize_epipolar_lines(img1, img2, kp1, kp2, pts1_filtered, pts2_filtered, F, title='Epipolar Lines')
+    pts1 = np.float32([kp1[m.queryIdx].pt for m in inlier_matches]).reshape(-1, 1, 2)
+    pts2 = np.float32([kp2[m.trainIdx].pt for m in inlier_matches]).reshape(-1, 1, 2)
+    img1_epilines, img2_epilines = draw_epipolar_lines(img1, img2, pts1, pts2, F)
+    plt.figure(figsize=(20, 10))
+    plt.subplot(121), plt.imshow(img1_epilines)
+    plt.subplot(122), plt.imshow(img2_epilines)
+    plt.show()
     
-
+    
+    
 
     
     # Step 5: 3D reconstruction
