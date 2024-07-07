@@ -53,8 +53,53 @@ def visualize_interest_points(img1, img2, kp1, kp2):
     plt.ylabel('Y')
     plt.show()
 
+def visualize_matched_interest_points(img1, img2, kp1, kp2, matches, color1=(0, 255, 0), color2=(0, 255, 255), title='Matched Interest Points'):
+    # Create a copy of the images to draw the keypoints on
+    img1_kp = cv2.drawKeypoints(img1, [kp1[m.queryIdx] for m in matches], None, color=color1)
+    img2_kp = cv2.drawKeypoints(img2, [kp2[m.trainIdx] for m in matches], None, color=color2)
+    
+    # Draw lines connecting the matched keypoints
+    img_matches = cv2.drawMatches(img1, kp1, img2, kp2, matches, None, matchColor=(255, 0, 0), flags=2)
+    
+    # Concatenate the images horizontally for visualization
+    result = cv2.hconcat([img1_kp, img2_kp])
+    
+    # Display the result using Matplotlib
+    plt.figure(figsize=(20, 10))
+    plt.imshow(result[:, :, ::-1])
+    plt.title(title)
+    plt.axis('off')
+    plt.show()
+    
+    plt.figure(figsize=(20, 10))
+    plt.imshow(img_matches[:, :, ::-1])
+    plt.title(title + ' with Lines')
+    plt.axis('off')
+    plt.show()
 
-def match_interest_points(img1, img2, kp1, kp2, des1, des2):
+def visualize_epipolar_lines(img1, img2, kp1, kp2, pts1, pts2, F, title='Inlier Matches with Epipolar Lines'):
+    # Create a copy of the first image to draw the epipolar lines
+    img3 = np.copy(img1)
+    h, w, _ = img1.shape
+    
+    # Draw the epipolar lines
+    for i, (pt1, pt2) in enumerate(zip(pts1, pts2)):
+        x1, y1 = pt1.ravel()
+        x2, y2 = pt2.ravel()
+        
+        # Draw the epipolar line connecting the matched points
+        color = tuple(np.random.randint(0, 255, 3).tolist())
+        line1 = cv2.line(img3, (0, int(-F[1,2]/F[1,1])), (w, int(-(F[1,2]+F[0,1]*w)/F[1,1])), color, 1)
+        line2 = cv2.line(img2, (0, int(-F[1,2]/F[1,1])), (w, int(-(F[1,2]+F[0,1]*w)/F[1,1])), color, 1)
+    
+    # Display the result using Matplotlib
+    plt.figure(figsize=(20, 10))
+    plt.imshow(cv2.hconcat([img3, img2]), cmap='gray')
+    plt.title(title)
+    plt.axis('off')
+    plt.show()
+    
+def match_interest_points_without_filtering(img1, img2, kp1, kp2, des1, des2):
     # Use BFMatcher to match the keypoints
     bf = cv2.BFMatcher()
     matches = bf.knnMatch(des1, des2, k=2)
@@ -64,39 +109,50 @@ def match_interest_points(img1, img2, kp1, kp2, des1, des2):
     for m, n in matches:
         if m.distance < 0.75 * n.distance:
             good_matches.append(m)
+            
+    # Shuffle the matches to select a random subset
+    random.shuffle(good_matches)
+    good_matches = good_matches[:200]
 
-    # Select a random subset of 70 matches if there are enough matches
-    if len(good_matches) > 70:
-        good_matches = random.sample(good_matches, 70)
+    return good_matches
 
-    # Extract the keypoint coordinates for the good matches
-    pts1 = np.float32([kp1[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
-    pts2 = np.float32([kp2[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+def estimate_fundamental_and_essential_matrices(pts1, pts2, K):
+    # Estimate the fundamental matrix using RANSAC
+    F, mask = cv2.findFundamentalMat(pts1, pts2, cv2.RANSAC)
+    
+    # Compute the essential matrix
+    E = K.T @ F @ K
+    
+    return F, E, mask
 
-    # Image with only good matched keypoints
-    keypoints_only_img1 = cv2.drawKeypoints(img1, [kp1[m.queryIdx] for m in good_matches], None, color=(0, 255, 0))
-    keypoints_only_img2 = cv2.drawKeypoints(img2, [kp2[m.trainIdx] for m in good_matches], None, color=(0, 255, 0))
-    keypoints_only_img = cv2.hconcat([keypoints_only_img1, keypoints_only_img2])
+def match_interest_points(img1, img2, kp1, kp2, des1, des2, K):
+    # Use BFMatcher to match the keypoints
+    bf = cv2.BFMatcher()
+    matches = bf.knnMatch(des1, des2, k=2)
 
-    # Image with thin lines connecting good matches
-    img_matches = cv2.drawMatches(img1, kp1, img2, kp2, good_matches, None, matchColor=(255, 0, 0), flags=2)
+    # Apply Lowe's ratio test to filter out poor matches
+    good_matches = []
+    for m, n in matches:
+        if m.distance < 0.75 * n.distance:
+            good_matches.append(m)
+            
+    # Shuffle the matches to select a random subset
+    random.shuffle(good_matches)
+    good_matches = good_matches[:200]
+    
+    # Estimate the fundamental and essential matrices
+    F, E, mask = estimate_fundamental_and_essential_matrices(np.float32([kp1[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2),
+                                                             np.float32([kp2[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2),
+                                                             K)
 
-    # Visualize both images
-    plt.figure(figsize=(20, 10))
-    plt.imshow(keypoints_only_img[:, :, ::-1])
-    plt.title('Keypoints Only')
-    plt.axis('off')
-    plt.show()
+    # Extract the inlier matches
+    inlier_matches = [good_matches[i] for i, m in enumerate(mask.ravel()) if m != 0]
 
-    plt.figure(figsize=(20, 10))
-    plt.imshow(img_matches[:, :, ::-1])
-    plt.title('Matched Interest Points with Lines')
-    plt.axis('off')
-    plt.show()
+    # Extract the keypoint coordinates for the inlier matches
+    pts1_inliers = np.float32([kp1[m.queryIdx].pt for m in inlier_matches]).reshape(-1, 1, 2)
+    pts2_inliers = np.float32([kp2[m.trainIdx].pt for m in inlier_matches]).reshape(-1, 1, 2)
 
-    return good_matches, pts1, pts2
-
-
+    return inlier_matches, pts1_inliers, pts2_inliers, F, E
 
 def main():
     # Set the data directory
@@ -112,22 +168,38 @@ def main():
     # Visualize the interest points
     visualize_interest_points(img1, img2, kp1, kp2)
     
-      # Step 2: Match interest points
-    good_matches, pts1, pts2 = match_interest_points(img1, img2, kp1, kp2, des1, des2)    
-
+    # Step 2: Match interest points (without filtering)
+    good_matches = match_interest_points_without_filtering(img1, img2, kp1, kp2, des1, des2)
     
-
+    # Visualize the matched interest points (keypoints only, before filtering)
+    visualize_matched_interest_points(img1, img2, kp1, kp2, good_matches, color1=(0, 255, 0), color2=(0, 255, 255), title='Matched Interest Points (Before Filtering)')
     
-    # Step 5: Estimate the Essential matrix
+    # Visualize the matched interest points (keypoints + lines, before filtering)
+    visualize_matched_interest_points(img1, img2, kp1, kp2, good_matches, color1=(0, 255, 0), color2=(0, 255, 0), title='Matched Interest Points with Lines (Before Filtering)')
+    
+    # Step 3: Match interest points (after filtering outliers)
+    inlier_matches, pts1_filtered, pts2_filtered, F, E = match_interest_points(img1, img2, kp1, kp2, des1, des2, K)
+    
+    # Visualize the matched interest points (keypoints + lines, after filtering)
+    visualize_matched_interest_points(img1, img2, kp1, kp2, inlier_matches, color1=(0, 255, 0), color2=(0, 0, 255), title='Matched Interest Points with Lines (After Filtering)')
+    
+    # Visualize a random subset of inlier matches with epipolar lines
+    visualize_epipolar_lines(img1, img2, kp1, kp2, pts1_filtered, pts2_filtered, F)
+    
+    # Step 4: Estimate the Essential and Fundamental matrices
+    print("Fundamental matrix:")
+    print(F)
+    
+    print("Essential matrix:")
+    print(E)
+    
+    # Step 5: 3D reconstruction
     # (Implement this step later)
     
-    # Step 6: 3D reconstruction
+    # Step 6: Detect planes
     # (Implement this step later)
     
-    # Step 7: Detect planes
-    # (Implement this step later)
-    
-    # Step 8: Visualize the normals
+    # Step 7: Visualize the normals
     # (Implement this step later)
     
     # Save the results
