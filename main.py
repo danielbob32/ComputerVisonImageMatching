@@ -1,9 +1,14 @@
+#%%
 import numpy as np
 import matplotlib.pyplot as plt
 import cv2 
 import os
 import random
-
+from mpl_toolkits.mplot3d import Axes3D
+import matplotlib.pyplot as plt
+import ipywidgets as widgets
+from ipywidgets import interactive, interact, interactive_output
+import matplotlib.widgets as widgets
 
 def load_data(data_dir):
     # Load the first image
@@ -36,6 +41,7 @@ def visualize_interest_points(img1, img2, kp1, kp2):
     # Create a copy of the images to draw the keypoints on
     img1_kp = cv2.drawKeypoints(img1, kp1, None, color=(0, 0, 255))
     img2_kp = cv2.drawKeypoints(img2, kp2, None, color=(0, 0, 255))
+    
     
     # Concatenate the images horizontally for visualization
     result = cv2.hconcat([img1_kp, img2_kp])
@@ -128,7 +134,7 @@ def filter_matches_based_on_E_and_F(kp1, kp2, matches, K):
     return final_inlier_matches, E, F
 
 
-def match_interest_points(des1, des2, ratio_test, num_matches=50):
+def match_interest_points(des1, des2, ratio_test, num_matches):
     # Use BFMatcher to match the keypoints
     bf = cv2.BFMatcher()
     matches = bf.knnMatch(des1, des2, k=2)
@@ -137,6 +143,7 @@ def match_interest_points(des1, des2, ratio_test, num_matches=50):
     good_matches = [m for m, n in matches if m.distance < ratio_test * n.distance]
 
     if len(good_matches) > num_matches:
+        print(f"Number of matches ({len(good_matches)}) exceeds the limit ({num_matches}). Randomly selecting {num_matches} matches.")
         selected_matches = random.sample(good_matches, num_matches)
     else:
         selected_matches = good_matches
@@ -144,7 +151,7 @@ def match_interest_points(des1, des2, ratio_test, num_matches=50):
     return selected_matches
 
 def draw_dotted_line(img, pt1, pt2, color, thickness=1, gap=5):
-    """Draw a dotted line in img from pt1 to pt2 with given color and thickness."""
+
     dist = ((pt1[0] - pt2[0]) ** 2 + (pt1[1] - pt2[1]) ** 2) ** 0.5
     points = []
     for i in np.arange(0, dist, gap):
@@ -211,6 +218,82 @@ def visualize_matches(img1, img2, kp1, kp2, matches, color1, color2, title):
     plt.title(title + ' with Lines')
     plt.axis('off')
     plt.show()
+###### task #4 ######
+
+def decompose_essential_matrix(E, K):
+    # Decompose the essential matrix into rotation and translation
+    R1, R2, t = cv2.decomposeEssentialMat(E)
+
+    # Compute the camera projection matrices
+    P1 = np.hstack((np.eye(3), np.zeros((3, 1))))
+    P2_list = []
+    for R in [R1, R2]:
+        P2 = np.hstack((R, t))
+        P2_list.append(K @ P2)
+
+    return P1, P2_list
+
+def triangulate_points(kp1, kp2, P1, P2, inlier_matches):
+    # Extract the matched 2D points
+    pts1 = np.float32([kp1[m.queryIdx].pt for m in inlier_matches]).reshape(-1, 1, 2)
+    pts2 = np.float32([kp2[m.trainIdx].pt for m in inlier_matches]).reshape(-1, 1, 2)
+
+    # Perform triangulation
+    try:
+        points_4d = cv2.triangulatePoints(P1, P2, pts1.transpose(), pts2.transpose())
+        print(f"Shape of points_4d: {points_4d.shape}")
+        print("First few 4D points:")
+        print(points_4d[:, :5])
+    except Exception as e:
+        print(f"Error in triangulation: {e}")
+        return np.array([])
+
+    # Filter out invalid 4D points (those with zero or near-zero fourth coordinate)
+    valid_mask = np.abs(points_4d[3]) > 1e-8
+    print(f"Number of valid 4D points: {np.sum(valid_mask)}")
+    valid_points_4d = points_4d[:, valid_mask]
+
+    # Convert the homogeneous 4D points to 3D points
+    points_3d = (valid_points_4d[:3] / valid_points_4d[3]).T
+
+    # Filter out invalid 3D points (those with NaN or inf values)
+    valid_mask = np.all(np.isfinite(points_3d), axis=1)
+    print(f"Number of valid 3D points: {np.sum(valid_mask)}")
+    points_3d = points_3d[valid_mask]
+    print(f"Final shape of points_3d: {points_3d.shape}")
+    print(f"the number of points is {points_3d.shape[0]}")
+    return points_3d
+
+def visualize_3d_points(points_3d):
+    fig = plt.figure(figsize=(10, 10))
+    ax = fig.add_subplot(111, projection='3d')
+    scat = ax.scatter(points_3d[:, 0], points_3d[:, 1], points_3d[:, 2], c='w', marker='o', s=50, edgecolor='b')
+
+
+    
+    # Set up sliders for rotation
+    ax_azim = fig.add_axes([0.25, 0.05, 0.65, 0.03])
+    azim_slider = widgets.Slider(ax_azim, 'Azimuth', -180, 180, valinit=0)
+    ax_elev = fig.add_axes([0.25, 0.0, 0.65, 0.03])
+    elev_slider = widgets.Slider(ax_elev, 'Elevation', -90, 90, valinit=0)
+
+    def update_view(val):
+        azim = azim_slider.val
+        elev = elev_slider.val
+        ax.view_init(elev=elev, azim=azim)
+        fig.canvas.draw_idle()
+
+    azim_slider.on_changed(update_view(azim_slider.val))
+    elev_slider.on_changed(update_view(elev_slider.val))
+
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.set_title('3D Points')
+    plt.show()
+    
+####################
+
 
 def main():
     # Set the data directory
@@ -227,15 +310,15 @@ def main():
     visualize_interest_points(img1, img2, kp1, kp2)
     
     # Step 2: Match interest points (without filtering)
-    matches = match_interest_points(des1, des2, ratio_test=0.75, num_matches=40)  # Now flexible to change
-    print("Number of matches:", len(matches))
+    matches = match_interest_points(des1, des2, ratio_test=0.75, num_matches=500)  # Now flexible to change
+
     # Visualize the matched interest points (keypoints only, before filtering)
     visualize_matched_points(img1, img2, kp1, kp2, matches, color1=(0, 255, 0), color2=(0, 0, 255), title='Matched Interest Points (Before Filtering)')
     
     
     # Step 3: Filter the Matches
     inlier_matches, E, F = filter_matches_based_on_E_and_F(kp1, kp2, matches, K)
-    print("Number of inlier matches:", len(inlier_matches))
+
 
     
     # Print E and F
@@ -251,6 +334,13 @@ def main():
     # Visualize the epipolar lines
     visualize_epipolar_lines(img1, img2, kp1, kp2, inlier_matches, F, title='Epipolar Lines')
 
+    # Step 4: 3D reconstruction
+    P1, P2_list = decompose_essential_matrix(E, K)
+    points_3d = triangulate_points(kp1, kp2, P1, P2_list[0], inlier_matches)
+    print(f"Number of 3D points: {points_3d.shape[0]}")
+    visualize_3d_points(points_3d)
+
 
 if __name__ == '__main__':
     main()
+# %%
