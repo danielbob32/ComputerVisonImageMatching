@@ -5,7 +5,6 @@ import cv2
 import os
 import random
 from mpl_toolkits.mplot3d import Axes3D
-import matplotlib.pyplot as plt
 import ipywidgets as widgets
 from ipywidgets import interactive, interact, interactive_output
 import matplotlib.widgets as widgets
@@ -42,7 +41,6 @@ def visualize_interest_points(img1, img2, kp1, kp2):
     img1_kp = cv2.drawKeypoints(img1, kp1, None, color=(0, 0, 255))
     img2_kp = cv2.drawKeypoints(img2, kp2, None, color=(0, 0, 255))
     
-    
     # Concatenate the images horizontally for visualization
     result = cv2.hconcat([img1_kp, img2_kp])
     
@@ -50,8 +48,7 @@ def visualize_interest_points(img1, img2, kp1, kp2):
     plt.figure(figsize=(20, 10))
     plt.imshow(result[:, :, ::-1])
     plt.title('Interest Points')
-    plt.xlabel('X')
-    plt.ylabel('Y')
+    plt.axis('off')
     plt.show()
 
 def compute_essential_matrix(kp1, kp2, matches, K):
@@ -151,7 +148,6 @@ def match_interest_points(des1, des2, ratio_test, num_matches):
     return selected_matches
 
 def draw_dotted_line(img, pt1, pt2, color, thickness=1, gap=5):
-
     dist = ((pt1[0] - pt2[0]) ** 2 + (pt1[1] - pt2[1]) ** 2) ** 0.5
     points = []
     for i in np.arange(0, dist, gap):
@@ -218,59 +214,52 @@ def visualize_matches(img1, img2, kp1, kp2, matches, color1, color2, title):
     plt.title(title + ' with Lines')
     plt.axis('off')
     plt.show()
-###### task #4 ######
 
-def decompose_essential_matrix(E, K):
-    # Decompose the essential matrix into rotation and translation
+def get_camera_projection_matrices(E, K):
+    # Decompose the Essential matrix to get rotation and translation
     R1, R2, t = cv2.decomposeEssentialMat(E)
 
-    # Compute the camera projection matrices
-    P1 = np.hstack((np.eye(3), np.zeros((3, 1))))
-    P2_list = []
-    for R in [R1, R2]:
-        P2 = np.hstack((R, t))
-        P2_list.append(K @ P2)
+    # Construct the camera projection matrices
+    P1 = np.hstack((np.eye(3, 3), np.zeros((3, 1))))  # P1 = K * [I | 0]
+    P1 = K @ P1
+    P2_list = [
+        K @ np.hstack((R1, t)),  # P2 = K * [R1 | t]
+        K @ np.hstack((R2, t))   # P2 = K * [R2 | t]
+    ]
 
     return P1, P2_list
 
-def triangulate_points(kp1, kp2, P1, P2, inlier_matches):
+def triangulate_points(kp1, kp2, matches, P1, P2_list):
+    best_pts3D = None
+    best_num_points = 0
+
+    for P2 in P2_list:
+        pts3D = _triangulate_points(kp1, kp2, matches, P1, P2)
+        num_points = pts3D.shape[0]
+        if num_points > best_num_points:
+            best_pts3D = pts3D
+            best_num_points = num_points
+
+    return best_pts3D
+
+def _triangulate_points(kp1, kp2, matches, P1, P2):
     # Extract the matched 2D points
-    pts1 = np.float32([kp1[m.queryIdx].pt for m in inlier_matches]).reshape(-1, 1, 2)
-    pts2 = np.float32([kp2[m.trainIdx].pt for m in inlier_matches]).reshape(-1, 1, 2)
+    pts1_hom = np.float32([kp1[m.queryIdx].pt + (1,) for m in matches]).T
+    pts2_hom = np.float32([kp2[m.trainIdx].pt + (1,) for m in matches]).T
 
-    # Perform triangulation
-    try:
-        points_4d = cv2.triangulatePoints(P1, P2, pts1.transpose(), pts2.transpose())
-        print(f"Shape of points_4d: {points_4d.shape}")
-        print("First few 4D points:")
-        print(points_4d[:, :5])
-    except Exception as e:
-        print(f"Error in triangulation: {e}")
-        return np.array([])
+    # Triangulate the 3D points
+    pts4D = cv2.triangulatePoints(P1, P2, pts1_hom[:2], pts2_hom[:2])
 
-    # Filter out invalid 4D points (those with zero or near-zero fourth coordinate)
-    valid_mask = np.abs(points_4d[3]) > 1e-8
-    print(f"Number of valid 4D points: {np.sum(valid_mask)}")
-    valid_points_4d = points_4d[:, valid_mask]
+    # Convert homogeneous 3D points to Euclidean coordinates
+    pts3D = (pts4D[:3] / pts4D[3]).T
 
-    # Convert the homogeneous 4D points to 3D points
-    points_3d = (valid_points_4d[:3] / valid_points_4d[3]).T
+    return pts3D
 
-    # Filter out invalid 3D points (those with NaN or inf values)
-    valid_mask = np.all(np.isfinite(points_3d), axis=1)
-    print(f"Number of valid 3D points: {np.sum(valid_mask)}")
-    points_3d = points_3d[valid_mask]
-    print(f"Final shape of points_3d: {points_3d.shape}")
-    print(f"the number of points is {points_3d.shape[0]}")
-    return points_3d
-
-def visualize_3d_points(points_3d):
+def visualize_3d_points(pts3D):
     fig = plt.figure(figsize=(10, 10))
     ax = fig.add_subplot(111, projection='3d')
-    scat = ax.scatter(points_3d[:, 0], points_3d[:, 1], points_3d[:, 2], c='w', marker='o', s=50, edgecolor='b')
+    scat = ax.scatter(pts3D[:, 0], pts3D[:, 1], pts3D[:, 2], c='w', marker='o', s=50, edgecolor='b')
 
-
-    
     # Set up sliders for rotation
     ax_azim = fig.add_axes([0.25, 0.05, 0.65, 0.03])
     azim_slider = widgets.Slider(ax_azim, 'Azimuth', -180, 180, valinit=0)
@@ -283,17 +272,107 @@ def visualize_3d_points(points_3d):
         ax.view_init(elev=elev, azim=azim)
         fig.canvas.draw_idle()
 
-    azim_slider.on_changed(update_view(azim_slider.val))
-    elev_slider.on_changed(update_view(elev_slider.val))
+    azim_slider.on_changed(update_view)
+    elev_slider.on_changed(update_view)
 
     ax.set_xlabel('X')
     ax.set_ylabel('Y')
     ax.set_zlabel('Z')
     ax.set_title('3D Points')
     plt.show()
-    
-####################
 
+def find_planes(pts3D, distance_threshold=0.1, min_inliers=100):
+    plane_normals = []
+    plane_offsets = []
+    plane_colors = []
+
+    remaining_points = pts3D.copy()
+    color_index = 0
+
+    while remaining_points.shape[0] > min_inliers:
+        # Fit a plane using RANSAC
+        best_normal = None
+        best_offset = None
+        best_inliers = 0
+
+        for _ in range(100):
+            # Randomly select 3 points to define a plane
+            sample_idx = np.random.choice(remaining_points.shape[0], size=3, replace=False)
+            sample_points = remaining_points[sample_idx]
+
+            # Compute the normal vector
+            normal = np.cross(sample_points[1] - sample_points[0], sample_points[2] - sample_points[0])
+            normal /= np.linalg.norm(normal)
+
+            # Compute the offset
+            offset = -np.dot(normal, sample_points[0])
+
+            # Count the number of inliers
+            distances = np.abs(np.dot(remaining_points, normal) + offset) / np.linalg.norm(normal)
+            inliers = np.sum(distances < distance_threshold)
+
+            if inliers > best_inliers:
+                best_normal = normal
+                best_offset = offset
+                best_inliers = inliers
+
+        if best_inliers < min_inliers:
+            break
+
+        # Add the plane to the list
+        plane_normals.append(best_normal)
+        plane_offsets.append(best_offset)
+        plane_colors.extend([color_index] * best_inliers)
+
+        # Remove the inlier points from the remaining points
+        inlier_mask = np.abs(np.dot(remaining_points, best_normal) + best_offset) / np.linalg.norm(best_normal) < distance_threshold
+        remaining_points = remaining_points[~inlier_mask]
+
+        color_index += 1
+
+    return np.array(plane_normals), np.array(plane_offsets), np.array(plane_colors)
+
+def visualize_planes(img1, img2, pts3D, plane_normals, plane_offsets, plane_colors):
+    fig = plt.figure(figsize=(20, 10))
+    ax = fig.add_subplot(121, projection='3d')
+    ax2 = fig.add_subplot(122)
+
+    # Plot the 2D images with color-coded points
+    ax2.imshow(img1)
+    ax2.imshow(img2)
+
+    # Plot the 3D point cloud with color-coded points
+    if pts3D.shape[0] == plane_colors.shape[0]:
+        scat = ax.scatter(pts3D[:, 0], pts3D[:, 1], pts3D[:, 2], c=plane_colors, s=50, edgecolor='k')
+    else:
+        print(f"Warning: The number of 3D points ({pts3D.shape[0]}) does not match the number of plane colors ({plane_colors.shape[0]}). Plotting a subset of the points.")
+        unique_colors, counts = np.unique(plane_colors, return_counts=True)
+        max_points = min(counts)
+        for i, color in enumerate(unique_colors):
+            idx = np.where(plane_colors == color)[0][:max_points]
+            ax.scatter(pts3D[idx, 0], pts3D[idx, 1], pts3D[idx, 2], c=[color], s=50, edgecolor='k')
+
+    # Plot the plane normals
+    for i, (normal, offset) in enumerate(zip(plane_normals, plane_offsets)):
+        x, y, z = normal
+        a, b, c = 0, 0, offset
+        ax.quiver(pts3D[plane_colors == i, 0].mean(),
+                  pts3D[plane_colors == i, 1].mean(),
+                  pts3D[plane_colors == i, 2].mean(),
+                  x, y, z, length=0.5, color=plane_colors[i])
+        ax2.quiver(pts3D[plane_colors == i, 0].mean(),
+                   pts3D[plane_colors == i, 1].mean(),
+                   x, y, z, scale=20, color=plane_colors[i])
+
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.set_title('3D Reconstruction with Planes')
+
+    ax2.set_title('Planes with Normals')
+    ax2.axis('off')
+
+    plt.show()
 
 def main():
     # Set the data directory
@@ -310,37 +389,21 @@ def main():
     visualize_interest_points(img1, img2, kp1, kp2)
     
     # Step 2: Match interest points (without filtering)
-    matches = match_interest_points(des1, des2, ratio_test=0.75, num_matches=500)  # Now flexible to change
+    matches = match_interest_points(des1, des2, ratio_test=0.75, num_matches=500)
 
-    # Visualize the matched interest points (keypoints only, before filtering)
-    visualize_matched_points(img1, img2, kp1, kp2, matches, color1=(0, 255, 0), color2=(0, 0, 255), title='Matched Interest Points (Before Filtering)')
-    
-    
     # Step 3: Filter the Matches
     inlier_matches, E, F = filter_matches_based_on_E_and_F(kp1, kp2, matches, K)
 
+    # Step 4: 3D Reconstruction
+    P1, P2_list = get_camera_projection_matrices(E, K)
+    pts3D = triangulate_points(kp1, kp2, inlier_matches, P1, P2_list)
 
-    
-    # Print E and F
-    print("Fundamental matrix:")
-    print(F)
-    
-    print("Essential matrix:")
-    print(E)
-    
-    # Visualize the matched interest points (keypoints + lines, after filtering)
-    visualize_matches(img1, img2, kp1, kp2, inlier_matches, color1=(0, 255, 0), color2=(0, 0, 255), title='Matched Interest Points with Lines (After Filtering)')
-    
-    # Visualize the epipolar lines
+    # Step 5: Find Planes
+    plane_normals, plane_offsets, plane_colors = find_planes(pts3D)
+
+    # Step 6: Visualize
     visualize_epipolar_lines(img1, img2, kp1, kp2, inlier_matches, F, title='Epipolar Lines')
-
-    # Step 4: 3D reconstruction
-    P1, P2_list = decompose_essential_matrix(E, K)
-    points_3d = triangulate_points(kp1, kp2, P1, P2_list[0], inlier_matches)
-    print(f"Number of 3D points: {points_3d.shape[0]}")
-    visualize_3d_points(points_3d)
-
+    visualize_planes(img1, img2, pts3D, plane_normals, plane_offsets, plane_colors)
 
 if __name__ == '__main__':
     main()
-# %%
