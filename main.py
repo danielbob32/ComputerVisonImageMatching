@@ -231,21 +231,32 @@ def decompose_essential_matrix(E, K):
 
     P2_list = []
     for R in [R1, R2]:
-        P2 = np.hstack((R, t))
-        P2 = K @ P2  # Apply intrinsic matrix
-        P2_list.append(P2)
+        for sign in [1, -1]:
+            P2 = np.hstack((R, sign * t))
+            P2 = K @ P2  # Apply intrinsic matrix
+            P2_list.append(P2)
 
     return P1, P2_list
 
+
 def triangulate_points(kp1, kp2, P1, P2, inlier_matches):
+    # Convert keypoints to numpy arrays
     pts1 = np.float32([kp1[m.queryIdx].pt for m in inlier_matches])
     pts2 = np.float32([kp2[m.trainIdx].pt for m in inlier_matches])
     
-    # Triangulate the points
+    # Triangulate points
     pts4D = cv2.triangulatePoints(P1, P2, pts1.T, pts2.T)
     
     # Convert from homogeneous coordinates to 3D
     pts3D = pts4D[:3] / pts4D[3]
+    
+    # Debugging output: Check for points behind the camera
+    num_negative_depths = np.sum(pts3D[2] < 0)
+    print(f"Number of points with negative depth: {num_negative_depths}")
+
+    # Check if any points are NaN or Inf and filter them out
+    valid_indices = np.all(np.isfinite(pts3D), axis=0)
+    pts3D = pts3D[:, valid_indices]
     
     return pts3D.T
 
@@ -280,7 +291,7 @@ def visualize_3d_points(points_3d):
     ax.set_title('3D Points')
     plt.show()
 ####################
-def fit_plane_ransac(points, distance_threshold=0.01, num_iterations=1000):
+def fit_plane_ransac(points, distance_threshold=0.5, num_iterations=1000):
     # Convert points to Open3D point cloud
     cloud = o3d.geometry.PointCloud()
     cloud.points = o3d.utility.Vector3dVector(points)
@@ -322,27 +333,6 @@ def draw_planes_on_images(img, points, color):
         img = cv2.circle(img, (int(point[0]), int(point[1])), 3, color, -1)
     return img
 
-def visualize_planes_on_images(img1, img2, points_3d, plane_models, inliers_list, K, P1, P2):
-    colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255)]
-    img1_color = img1 if len(img1.shape) == 3 else cv2.cvtColor(img1, cv2.COLOR_GRAY2BGR)
-    img2_color = img2 if len(img2.shape) == 3 else cv2.cvtColor(img2, cv2.COLOR_GRAY2BGR)
-    
-    for i, (plane, inliers) in enumerate(zip(plane_models, inliers_list)):
-        plane_points = points_3d[inliers]
-        print(f"Plane {i+1}: {plane} with {len(inliers)} inliers")
-        proj_points1 = project_points(plane_points, K, P1[:, :3], P1[:, 3:])
-        proj_points2 = project_points(plane_points, K, P2[:, :3], P2[:, 3:])
-        img1_color = draw_planes_on_images(img1_color, proj_points1, colors[i % len(colors)])
-        img2_color = draw_planes_on_images(img2_color, proj_points2, colors[i % len(colors)])
-    
-    plt.figure(figsize=(20, 10))
-    plt.subplot(121)
-    plt.imshow(cv2.cvtColor(img1_color, cv2.COLOR_BGR2RGB))
-    plt.title('Detected Planes on Image 1')
-    plt.subplot(122)
-    plt.imshow(cv2.cvtColor(img2_color, cv2.COLOR_BGR2RGB))
-    plt.title('Detected Planes on Image 2')
-    plt.show()
 
 
 def visualize_3d_planes(points_3d, plane_models, inliers_list):
@@ -361,6 +351,32 @@ def visualize_3d_planes(points_3d, plane_models, inliers_list):
     plt.title('Detected Planes in 3D Space')
     plt.show()
 
+def visualize_planes_on_images(img1, img2, kp1, kp2, inliers_list, title='Planes Visualization'):
+    img1_copy = img1.copy()
+    img2_copy = img2.copy()
+    
+    colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (0, 255, 255)]
+    
+    for idx, inliers in enumerate(inliers_list):
+        color = colors[idx % len(colors)]
+        for i in inliers:
+            pt1 = kp1[i].pt
+            pt2 = kp2[i].pt
+            cv2.circle(img1_copy, (int(pt1[0]), int(pt1[1])), 5, color, -1)
+            cv2.circle(img2_copy, (int(pt2[0]), int(pt2[1])), 5, color, -1)
+    
+    plt.figure(figsize=(15, 5))
+    plt.subplot(121)
+    plt.title(f'{title} - Image 1')
+    plt.imshow(cv2.cvtColor(img1_copy, cv2.COLOR_BGR2RGB))
+    plt.axis('off')
+    
+    plt.subplot(122)
+    plt.title(f'{title} - Image 2')
+    plt.imshow(cv2.cvtColor(img2_copy, cv2.COLOR_BGR2RGB))
+    plt.axis('off')
+    
+    plt.show()
 
 def main():
     # Set the data directory
@@ -377,7 +393,7 @@ def main():
     #visualize_interest_points(img1, img2, kp1, kp2)
     
     # Step 2: Match interest points (without filtering)
-    matches = match_interest_points(des1, des2, ratio_test=0.75, num_matches=500)  # Now flexible to change
+    matches = match_interest_points(des1, des2, ratio_test=0.3, num_matches=10000)  # Now flexible to change
 
     # Visualize the matched interest points (keypoints only, before filtering)
     #visualize_matched_points(img1, img2, kp1, kp2, matches, color1=(0, 255, 0), color2=(0, 0, 255), title='Matched Interest Points (Before Filtering)')
@@ -410,8 +426,8 @@ def main():
     visualize_3d_points(points_3d)
 
     num_planes = 2
-    distance_threshold = 0.02
-    num_iterations = 1000
+    distance_threshold = 0.01
+    num_iterations = 2000
 
     plane_models = []
     inliers_list = []
@@ -427,7 +443,8 @@ def main():
     # Visualize the 3D points and the detected planes
     plot_planes(points_3d, plane_models, inliers_list)
 
-    visualize_planes_on_images(img1, img2, points_3d, plane_models, inliers_list, K, P1, P2_list[0])
+    
+    visualize_planes_on_images(img1, img2, kp1, kp2, inliers_list)
 
 
 if __name__ == '__main__':
