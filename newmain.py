@@ -97,50 +97,54 @@ def fit_plane(p1, p2, p3):
 
 def distance_from_plane(point, coefficients):
     a, b, c, d = coefficients
-    # Calculate the distance from the point to the plane
-    num = abs(a * point[0] + b * point[1] + c * point[2] + d)
     den = np.sqrt(a**2 + b**2 + c**2)
+    if den == 0:
+        return np.inf  # Return a large number if the denominator is zero
+    num = abs(a * point[0] + b * point[1] + c * point[2] + d)
     return num / den
 
-def sequential_ransac(points, num_planes=2, max_trials=2000, inlier_threshold=0.0001):
+
+def sequential_ransac(points, num_planes=2, max_trials=5000, inlier_threshold=0.0006):
     remaining_points = points.copy()
-    remaining_mask = np.ones(len(points), dtype=bool)  # Initially, all points are remaining
+    remaining_mask = np.ones(len(points), dtype=bool)  # Initially, all points are available
     planes = []
     norms = []
-    masks = []  # This could be a list of inlier masks if you need to track them
+    masks = []  # To store masks of inliers for each plane
 
     for _ in range(num_planes):
-        if remaining_points.sum() < 3:
+        if np.count_nonzero(remaining_mask) < 3:
+            print("Not enough points to form a plane.")
             break
+
         best_inliers = np.zeros(len(points), dtype=bool)
         best_plane = None
 
         for _ in range(max_trials):
-            # Randomly select 3 points
             indices = np.random.choice(np.where(remaining_mask)[0], 3, replace=False)
             sample = points[indices]
             plane_coeffs = fit_plane(*sample)
-            # Determine inliers
+
+            # Calculate distances for all points
             distances = np.array([distance_from_plane(pt, plane_coeffs) for pt in points])
             inliers = distances < inlier_threshold
-            # Update best model if this model has more inliers
+
+            # Update best model if more inliers are found
             if inliers.sum() > best_inliers.sum():
                 best_inliers = inliers
                 best_plane = plane_coeffs
 
-        # Store the best plane found
         planes.append(points[best_inliers])
         norms.append(best_plane[:3])
-        masks.append(best_inliers)  # Store the mask of inliers
-        # Update the mask of remaining points
+        masks.append(best_inliers)
         remaining_mask &= ~best_inliers
 
-    return planes, masks, norms  # Ensure to return three values
+    return planes, masks, norms
+
 
 
 def main():
     data_dir = 'data/reference'
-    num_matches = 300
+    num_matches = 70
     img1, img2, K = load_data(data_dir)
     if img1.shape[0] != img2.shape[0]:
         print(f"Resizing img2 from {img2.shape} to match img1 {img1.shape}")
@@ -175,8 +179,10 @@ def main():
     lines1 = cv2.computeCorrespondEpilines(pts2.reshape(-1, 1, 2), 2, F)
     lines1 = lines1.reshape(-1, 3)
     drawlines(img1, img2, lines1, lines2, pts1[:num_matches], pts2[:num_matches])
+
     pts1_undistorted = cv2.undistortPoints(pts1, K, None)
     pts2_undistorted = cv2.undistortPoints(pts2, K, None)
+
     points, R, t, mask = cv2.recoverPose(E, pts1_undistorted, pts2_undistorted, K)
     P1 = np.hstack((K, np.zeros((3, 1))))
     P2 = np.dot(K, np.hstack((R, t)))
@@ -184,48 +190,61 @@ def main():
     print("\nCamera Matrix P2:\n", P2)
     points_4d = cv2.triangulatePoints(P1, P2, pts1_undistorted.reshape(-1, 2).T, pts2_undistorted.reshape(-1, 2).T)
     points_3d = points_4d[:3] / points_4d[3]
-    clustering = DBSCAN(eps=0.1, min_samples=5).fit(points_3d.T)
-    labels = clustering.labels_
     fig = plt.figure(figsize=(10, 8))
     ax = fig.add_subplot(111, projection='3d')
-    colors = ['blue', 'cyan', 'red', 'green', 'magenta', 'yellow']
-    for i in range(max(labels) + 1):
-        cluster_points = points_3d.T[labels == i]
-        ax.scatter(cluster_points[:, 0], cluster_points[:, 1], cluster_points[:, 2], c=colors[i % len(colors)])
+    ax.scatter(points_3d[0], points_3d[1], points_3d[2], c='b', marker='o')
+
     ax.set_xlabel('X Label')
     ax.set_ylabel('Y Label')
     ax.set_zlabel('Z Label')
-    plt.title('3D Reconstruction Cloud from Matches (Clustered)')
+    plt.title('3D Reconstruction Cloud from Matches')
     plt.show()
+
     num_planes = 2
     planes, masks, normals = sequential_ransac(points_3d.T, num_planes)
+
     fig, axes = plt.subplots(1, 2, figsize=(20, 10))
     axes[0].imshow(img1, cmap='gray')
     axes[0].set_title('Image 1 with Colored Planes')
     axes[1].imshow(img2, cmap='gray')
     axes[1].set_title('Image 2 with Colored Planes')
-    colors = ['blue', 'cyan']
-    for i, mask in enumerate(masks):
+
+    colors = ['r', 'g', 'b']
+    for i, inliers in enumerate(planes):
+        mask = masks[i]
         projected_points_img1 = pts1[mask]
         projected_points_img2 = pts2[mask]
         for pt in projected_points_img1:
             pt = np.round(pt).astype(int)
             if 0 <= pt[1] < img1.shape[0] and 0 <= pt[0] < img1.shape[1]:
-                axes[0].scatter(pt[0], pt[1], color=colors[i], s=10, alpha=0.7)
+                axes[0].scatter(pt[0], pt[1], color=colors[i], s=5)
+
         for pt in projected_points_img2:
             pt = np.round(pt).astype(int)
             if 0 <= pt[1] < img2.shape[0] and 0 <= pt[0] < img2.shape[1]:
-                axes[1].scatter(pt[0], pt[1], color=colors[i], s=10, alpha=0.7)
+                axes[1].scatter(pt[0], pt[1], color=colors[i], s=5)
+
     for ax in axes:
         ax.axis('off')
+
     plt.show()
-    fig, axes = plt.subplots(1, 2, figsize=(20, 10))
-    axes[0].imshow(img1, cmap='gray')
-    axes[0].set_title('Image 1 with Colored Planes and Normals')
-    axes[1].imshow(img2, cmap='gray')
-    axes[1].set_title('Image 2 with Colored Planes and Normals')
-    scale = 20
-    print(normals)
+    
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot(111, projection='3d')
+
+    # Assuming 'planes' contains the points for each plane detected
+    colors = ['blue', 'green', 'red', 'cyan', 'magenta', 'yellow']  # Extend colors as needed
+    for plane_index, plane_points in enumerate(planes):
+        ax.scatter(plane_points[:, 0], plane_points[:, 1], plane_points[:, 2], c=colors[plane_index % len(colors)], label=f'Plane {plane_index + 1}')
+
+    ax.set_xlabel('X Label')
+    ax.set_ylabel('Y Label')
+    ax.set_zlabel('Z Label')
+    plt.title('3D Reconstruction Cloud from Matches (Clustered by Planes)')
+    plt.legend()
+    plt.show()
+
+    
     colors = ['blue', 'cyan']
     for i, (inliers, mask, normal) in enumerate(zip(planes, masks, normals)):
         projected_points_img1 = pts1[mask]
