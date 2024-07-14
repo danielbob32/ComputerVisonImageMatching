@@ -66,8 +66,7 @@ def compute_essential_matrix(kp1, kp2, matches, K):
     pts1 = np.float32([kp1[m.queryIdx].pt for m in matches])
     pts2 = np.float32([kp2[m.trainIdx].pt for m in matches])
 
-    # Compute the essential matrix using the 5-point algorithm with RANSAC
-    E, mask = cv2.findEssentialMat(pts1, pts2, K, method=cv2.RANSAC, prob=0.999, threshold=1.0)
+    E, mask = cv2.findEssentialMat(pts1, pts2, K)
 
     return E, mask
 
@@ -141,16 +140,16 @@ def filter_matches_based_on_E_and_F(kp1, kp2, matches, K):
     inlier_matches = [m for i, m in enumerate(matches) if mask_E[i] == 1]
     
     # Extract points from the inlier matches
-    pts1_inliers = np.float32([kp1[m.queryIdx].pt for m in inlier_matches])
-    pts2_inliers = np.float32([kp2[m.trainIdx].pt for m in inlier_matches])
+    pts1 = np.float32([kp1[m.queryIdx].pt for m in matches])
+    pts2 = np.float32([kp2[m.trainIdx].pt for m in matches])
     
     # Compute the fundamental matrix using the inlier points
-    F, mask_F = cv2.findFundamentalMat(pts1_inliers, pts2_inliers, method=cv2.FM_LMEDS)
+    F, mask_F = cv2.findFundamentalMat(pts1, pts2, method=cv2.RANSAC)
     
-    # Extract the final inlier matches based on the fundamental matrix
-    final_inlier_matches = [m for i, m in enumerate(inlier_matches) if mask_F[i] == 1]
+    matches_inlier = [matches[i] for i in range(len(matches)) if mask_E.flatten()[i] == 1]
+
     
-    return final_inlier_matches, E, F
+    return matches_inlier, E, F
 
 
 def match_interest_points(des1, des2, ratio_test, num_matches):
@@ -415,7 +414,7 @@ def main():
     visualize_interest_points(img1, img2, kp1, kp2)
     
     # Step 2: Match interest points (without filtering)
-    matches = match_interest_points(des1, des2, ratio_test=0.9, num_matches=100)  # Now flexible to change
+    matches = match_interest_points(des1, des2, ratio_test=0.75, num_matches=70)  # Now flexible to change
 
     # Visualize the matched interest points (keypoints only, before filtering)
     visualize_matched_points(img1, img2, kp1, kp2, matches, color1=(0, 255, 0), color2=(0, 0, 255), title='Matched Interest Points (Before Filtering)')
@@ -427,7 +426,7 @@ def main():
     print("Fundamental matrix:")
     print(F)
     
-    # Print "Essential matrix:"
+    print ("Essential matrix:")
     print(E)
     
     # Visualize the matched interest points (keypoints + lines, after filtering)
