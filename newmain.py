@@ -83,52 +83,59 @@ def drawlines(img1, img2, lines1, lines2, pts1, pts2):
         axes[1].plot(pt2[0], pt2[1], 'go', markersize=7, markerfacecolor='none', markeredgewidth=1)
     plt.show()
 
-def sequential_ransac(points, num_planes=2, max_trials=2000, residual_threshold=0.0001):
-    planes = []
+
+def fit_plane(p1, p2, p3):
+    # Create vectors from points
+    v1 = p2 - p1
+    v2 = p3 - p1
+    # Compute the cross product to get the normal to the plane
+    cp = np.cross(v1, v2)
+    a, b, c = cp
+    # This gives us the coefficients of the plane equation: ax + by + cz + d = 0
+    d = -np.dot(cp, p1)
+    return a, b, c, d
+
+def distance_from_plane(point, coefficients):
+    a, b, c, d = coefficients
+    # Calculate the distance from the point to the plane
+    num = abs(a * point[0] + b * point[1] + c * point[2] + d)
+    den = np.sqrt(a**2 + b**2 + c**2)
+    return num / den
+
+def sequential_ransac(points, num_planes=2, max_trials=2000, inlier_threshold=0.0001):
     remaining_points = points.copy()
-    all_masks = []  # This will store the full-sized masks
+    remaining_mask = np.ones(len(points), dtype=bool)  # Initially, all points are remaining
+    planes = []
     norms = []
-    plane_count = 0
-    total_points = points.shape[0]
-    
-    for i in range(num_planes):
-        if len(remaining_points) < 3:
-            print(f"Not enough points to form a plane. Remaining points: {len(remaining_points)}")
+    masks = []  # This could be a list of inlier masks if you need to track them
+
+    for _ in range(num_planes):
+        if remaining_points.sum() < 3:
             break
+        best_inliers = np.zeros(len(points), dtype=bool)
+        best_plane = None
 
-        poly = PolynomialFeatures(degree=1)
-        X_poly = poly.fit_transform(remaining_points[:, :2])
-        y = remaining_points[:, 2]
-        ransac = RANSACRegressor(min_samples=3, residual_threshold=residual_threshold, max_trials=max_trials)
-        ransac.fit(X_poly, y)
+        for _ in range(max_trials):
+            # Randomly select 3 points
+            indices = np.random.choice(np.where(remaining_mask)[0], 3, replace=False)
+            sample = points[indices]
+            plane_coeffs = fit_plane(*sample)
+            # Determine inliers
+            distances = np.array([distance_from_plane(pt, plane_coeffs) for pt in points])
+            inliers = distances < inlier_threshold
+            # Update best model if this model has more inliers
+            if inliers.sum() > best_inliers.sum():
+                best_inliers = inliers
+                best_plane = plane_coeffs
 
-        inlier_mask_small = ransac.inlier_mask_
-        outlier_mask_small = np.logical_not(inlier_mask_small)
-        
-        # Convert small mask to full-sized mask
-        full_mask = np.zeros(total_points, dtype=bool)
-        full_mask[np.where(all_masks[-1] if all_masks else np.ones(total_points, dtype=bool))[0][:len(inlier_mask_small)]] = inlier_mask_small
-        
-        inliers = points[full_mask]
-        planes.append(inliers)
+        # Store the best plane found
+        planes.append(points[best_inliers])
+        norms.append(best_plane[:3])
+        masks.append(best_inliers)  # Store the mask of inliers
+        # Update the mask of remaining points
+        remaining_mask &= ~best_inliers
 
-        # Update remaining points
-        remaining_points = remaining_points[outlier_mask_small]
-
-        # Debug outputs
-        print(f"Plane {i + 1}:")
-        print(f"  Normal: {ransac.estimator_.coef_[1:]}, Intercept: {-ransac.estimator_.intercept_}")
-        print(f"  Points on plane: {len(inliers)}")
-        print(f"  Remaining points: {len(remaining_points)}")
-
-        # Store the full mask and normals
-        all_masks.append(full_mask)
-        norms.append([ransac.estimator_.coef_[1], ransac.estimator_.coef_[2], -ransac.estimator_.intercept_])
-
-        plane_count += 1
-
-    print(f"Total planes detected: {plane_count}")
-    return planes, all_masks, norms
+    return planes, masks, norms  # Ensure to return three values
 
 
 def main():
