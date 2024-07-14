@@ -1,13 +1,9 @@
 #%%
-import cv2
 import numpy as np
+import cv2
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
-from sklearn.linear_model import RANSACRegressor
-from sklearn.preprocessing import PolynomialFeatures
-from sklearn.cluster import DBSCAN
 import os
-
 def load_data(data_dir):
     img1 = cv2.imread(os.path.join(data_dir, 'I1.png'), cv2.IMREAD_GRAYSCALE)
     if img1 is None:
@@ -82,7 +78,7 @@ def drawlines(img1, img2, lines1, lines2, pts1, pts2):
     for pt2 in pts2:
         axes[1].plot(pt2[0], pt2[1], 'go', markersize=7, markerfacecolor='none', markeredgewidth=1)
     plt.show()
-
+    
 
 def fit_plane(p1, p2, p3):
     # Create vectors from points
@@ -103,16 +99,18 @@ def distance_from_plane(point, coefficients):
     num = abs(a * point[0] + b * point[1] + c * point[2] + d)
     return num / den
 
-
-def sequential_ransac(points, num_planes=2, max_trials=5000, inlier_threshold=0.0006):
-    remaining_points = points.copy()
+def sequential_ransac(points, num_planes=2, max_trials=20000, inlier_threshold=0.0006):
+    min_inliers = 100
     remaining_mask = np.ones(len(points), dtype=bool)  # Initially, all points are available
     planes = []
     norms = []
     masks = []  # To store masks of inliers for each plane
 
-    for _ in range(num_planes):
-        if np.count_nonzero(remaining_mask) < 3:
+    for plane_index in range(num_planes):
+        print(f"Detecting plane {plane_index + 1}...")
+        print(f"Number of remaining points: {np.sum(remaining_mask)}")
+   
+        if np.count_nonzero(remaining_mask) < min_inliers:
             print("Not enough points to form a plane.")
             break
 
@@ -124,23 +122,24 @@ def sequential_ransac(points, num_planes=2, max_trials=5000, inlier_threshold=0.
             sample = points[indices]
             plane_coeffs = fit_plane(*sample)
 
-            # Calculate distances for all points
             distances = np.array([distance_from_plane(pt, plane_coeffs) for pt in points])
             inliers = distances < inlier_threshold
 
-            # Update best model if more inliers are found
             if inliers.sum() > best_inliers.sum():
                 best_inliers = inliers
                 best_plane = plane_coeffs
 
+        if best_plane is None:
+            print("No valid plane found for this iteration.")
+            break
+
+        print(f"Plane {plane_index + 1} found with {np.sum(best_inliers)} inliers.")
         planes.append(points[best_inliers])
         norms.append(best_plane[:3])
         masks.append(best_inliers)
-        remaining_mask &= ~best_inliers
+        remaining_mask &= ~best_inliers  # Properly exclude inliers of this plane
 
     return planes, masks, norms
-
-
 
 def main():
     data_dir = 'data/reference'
@@ -186,21 +185,29 @@ def main():
     points, R, t, mask = cv2.recoverPose(E, pts1_undistorted, pts2_undistorted, K)
     P1 = np.hstack((K, np.zeros((3, 1))))
     P2 = np.dot(K, np.hstack((R, t)))
+    
     print("Camera Matrix P1:\n", P1)
     print("\nCamera Matrix P2:\n", P2)
+    
     points_4d = cv2.triangulatePoints(P1, P2, pts1_undistorted.reshape(-1, 2).T, pts2_undistorted.reshape(-1, 2).T)
+    print("example of a point in 4d:", points_4d[:, 0])
     points_3d = points_4d[:3] / points_4d[3]
+
+    print("Shape of points_4d:", points_4d.shape)
+    print("Shape of points_3d:", points_3d.shape)
+    print("Number of 3D points reconstructed:", points_3d.shape[1])
+    
     fig = plt.figure(figsize=(10, 8))
     ax = fig.add_subplot(111, projection='3d')
     ax.scatter(points_3d[0], points_3d[1], points_3d[2], c='b', marker='o')
-
-    ax.set_xlabel('X Label')
-    ax.set_ylabel('Y Label')
-    ax.set_zlabel('Z Label')
-    plt.title('3D Reconstruction Cloud from Matches')
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    plt.title(f'3D Reconstruction Cloud ({points_3d.shape[1]} points)')
     plt.show()
-
+    
     num_planes = 2
+    points = np.random.rand(1000,3)
     planes, masks, normals = sequential_ransac(points_3d.T, num_planes)
 
     fig, axes = plt.subplots(1, 2, figsize=(20, 10))
@@ -226,7 +233,30 @@ def main():
 
     for ax in axes:
         ax.axis('off')
-
+    plt.show()
+    
+    #draw rectangle of the assumed planes
+    fig, axes = plt.subplots(1, 2, figsize=(20, 10))
+    axes[0].imshow(img1, cmap='gray')
+    axes[0].set_title('Image 1 with Planes')
+    axes[1].imshow(img2, cmap='gray')
+    axes[1].set_title('Image 2 with Planes')
+    
+    for i, inliers in enumerate(planes):
+        mask = masks[i]
+        projected_points_img1 = pts1[mask]
+        projected_points_img2 = pts2[mask]
+        min_x, min_y = np.min(projected_points_img1, axis=0)
+        max_x, max_y = np.max(projected_points_img1, axis=0)
+        rect = plt.Rectangle((min_x, min_y), max_x - min_x, max_y - min_y, linewidth=1, edgecolor='r', facecolor='none')
+        axes[0].add_patch(rect)
+        min_x, min_y = np.min(projected_points_img2, axis=0)
+        max_x, max_y = np.max(projected_points_img2, axis=0)
+        rect = plt.Rectangle((min_x, min_y), max_x - min_x, max_y - min_y, linewidth=1, edgecolor='b', facecolor='none')
+        axes[1].add_patch(rect)
+        
+    for ax in axes:
+        ax.axis('off')
     plt.show()
     
     fig = plt.figure(figsize=(10, 8))
@@ -244,26 +274,35 @@ def main():
     plt.legend()
     plt.show()
 
-    
+    fig, axes = plt.subplots(1, 2, figsize=(20, 10))
+    axes[0].imshow(img1, cmap='gray')
+    axes[0].set_title('Image 1 with Plane Normals')
+    axes[1].imshow(img2, cmap='gray')
+    axes[1].set_title('Image 2 with Plane Normals')
+
+    scale = 50
     colors = ['blue', 'cyan']
     for i, (inliers, mask, normal) in enumerate(zip(planes, masks, normals)):
         projected_points_img1 = pts1[mask]
         projected_points_img2 = pts2[mask]
+        
         for pt in projected_points_img1:
             pt = np.round(pt).astype(int)
             if 0 <= pt[1] < img1.shape[0] and 0 <= pt[0] < img1.shape[1]:
-                axes[0].scatter(pt[0], pt[1], color=colors[i], s=10, alpha=0.7)
-                end_point = (pt[0] + scale * normal[0], pt[1] + scale * normal[1])
-                axes[0].plot([pt[0], end_point[0]], [pt[1], end_point[1]], color=colors[i], linewidth=2)
+                axes[0].arrow(pt[0], pt[1], scale * normal[0], scale * normal[1], 
+                            color=colors[i], width=1, head_width=5, head_length=5)
+
         for pt in projected_points_img2:
             pt = np.round(pt).astype(int)
             if 0 <= pt[1] < img2.shape[0] and 0 <= pt[0] < img2.shape[1]:
-                axes[1].scatter(pt[0], pt[1], color=colors[i], s=10, alpha=0.7)
-                end_point = (pt[0] + scale * normal[0], pt[1] + scale * normal[1])
-                axes[1].plot([pt[0], end_point[0]], [pt[1], end_point[1]], color=colors[i], linewidth=2)
+                axes[1].arrow(pt[0], pt[1], scale * normal[0], scale * normal[1], 
+                            color=colors[i], width=1, head_width=5, head_length=5)
     for ax in axes:
         ax.axis('off')
+    plt.tight_layout()
     plt.show()
 
 if __name__ == '__main__':
     main()
+
+# %%
