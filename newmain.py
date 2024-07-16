@@ -83,16 +83,7 @@ def drawlines(img1, img2, lines1, lines2, pts1, pts2):
     plt.show()
     
 
-# def fit_plane(p1, p2, p3):
-#     # Create vectors from points
-#     v1 = p2 - p1
-#     v2 = p3 - p1
-#     # Compute the cross product to get the normal to the plane
-#     cp = np.cross(v1, v2)
-#     a, b, c = cp
-#     # This gives us the coefficients of the plane equation: ax + by + cz + d = 0
-#     d = -np.dot(cp, p1)
-#     return a, b, c, d
+
 
 def distance_from_plane(point, coefficients):
     a, b, c, d = coefficients
@@ -152,11 +143,6 @@ def fit_plane(p1, p2, p3):
     d = -np.dot(normal, p1)
     return normal[0], normal[1], normal[2], d
 
-# def distance_from_plane(point, coefficients):
-#     a, b, c, d = coefficients
-#     numerator = abs(a * point[0] + b * point[1] + c * point[2] + d)
-#     denominator = np.sqrt(a**2 + b**2 + c**2)
-#     return numerator / denominator
 
 def refine_plane(points):
     # Use least squares to refine the plane equation
@@ -168,6 +154,29 @@ def refine_plane(points):
     d = reg.intercept_
     return a, b, c, d
 
+# Adjust normals to be more aligned with principal directions
+def adjust_normal(normal):
+    abs_normal = np.abs(normal)
+    max_index = np.argmax(abs_normal)
+    adjusted = np.zeros_like(normal)
+    adjusted[max_index] = np.sign(normal[max_index])
+    return adjusted
+
+
+
+def estimate_normals(points, k=10):
+    # Use k-nearest neighbors to estimate normals
+    tree = KDTree(points)
+    _, indices = tree.query(points, k=k)
+    
+    normals = []
+    for neighbors in indices:
+        cov = np.cov(points[neighbors].T)
+        eigenvalues, eigenvectors = np.linalg.eig(cov)
+        normal = eigenvectors[:, np.argmin(eigenvalues)]
+        normals.append(normal)
+    
+    return np.array(normals)
 
 def main():
     data_dir = 'data/reference'
@@ -212,6 +221,7 @@ def main():
 
     points, R, t, mask = cv2.recoverPose(E, pts1_undistorted, pts2_undistorted, K)
     P1 = np.hstack((K, np.zeros((3, 1))))
+    print(K)
     P2 = np.dot(K, np.hstack((R, t)))
     
     print("Camera Matrix P1:\n", P1)
@@ -328,31 +338,8 @@ def main():
 
 
 
-    def estimate_normals(points, k=10):
-        # Use k-nearest neighbors to estimate normals
-        tree = KDTree(points)
-        _, indices = tree.query(points, k=k)
-        
-        normals = []
-        for neighbors in indices:
-            cov = np.cov(points[neighbors].T)
-            eigenvalues, eigenvectors = np.linalg.eig(cov)
-            normal = eigenvectors[:, np.argmin(eigenvalues)]
-            normals.append(normal)
-        
-        return np.array(normals)
-
     # In the main function:
     normals = estimate_normals(points_3d.T)
-
-    # Adjust normals to be more aligned with principal directions
-    def adjust_normal(normal):
-        abs_normal = np.abs(normal)
-        max_index = np.argmax(abs_normal)
-        adjusted = np.zeros_like(normal)
-        adjusted[max_index] = np.sign(normal[max_index])
-        return adjusted
-
     adjusted_normals = np.apply_along_axis(adjust_normal, 1, normals)
 
     # Use these adjusted normals in the visualization
