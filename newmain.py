@@ -108,7 +108,7 @@ def sequential_ransac(points, num_planes=2, max_trials=200, inlier_threshold=0.0
     masks = []
 
     for _ in range(num_planes):
-        if len(remaining_points) < 4:  # Need at least 4 points to fit a plane
+        if len(remaining_points) < 4:
             break
 
         best_inliers = []
@@ -116,27 +116,15 @@ def sequential_ransac(points, num_planes=2, max_trials=200, inlier_threshold=0.0
         best_num_inliers = 0
 
         for _ in range(max_trials):
-            # Sample 3 points
             sample = remaining_points[np.random.choice(len(remaining_points), 3, replace=False)]
             plane_coeffs = fit_plane(*sample)
-
-            # Calculate distances
             distances = np.array([distance_from_plane(pt, plane_coeffs) for pt in remaining_points])
+            inliers = remaining_points[distances < inlier_threshold]
 
-            # Use adaptive threshold if not specified
-            if inlier_threshold is None:
-                threshold = np.mean(distances) * 0.5
-            else:
-                threshold = inlier_threshold
-
-            # Find inliers
-            inliers = remaining_points[distances < threshold]
-
-            # Refine the plane if we found more inliers
             if len(inliers) > best_num_inliers:
                 refined_coeffs = refine_plane(inliers)
                 refined_distances = np.array([distance_from_plane(pt, refined_coeffs) for pt in remaining_points])
-                refined_inliers = remaining_points[refined_distances < threshold]
+                refined_inliers = remaining_points[refined_distances < inlier_threshold]
 
                 if len(refined_inliers) > best_num_inliers:
                     best_inliers = refined_inliers
@@ -147,11 +135,10 @@ def sequential_ransac(points, num_planes=2, max_trials=200, inlier_threshold=0.0
             break
 
         planes.append(best_inliers)
-        norms.append(best_plane[:3])
+        norms.append(best_plane[:3] / np.linalg.norm(best_plane[:3]))  # Normalize the normal vector
         mask = np.array([np.any(np.all(p == best_inliers, axis=1)) for p in points])
         masks.append(mask)
 
-        # Remove inliers from remaining points
         remaining_points = remaining_points[~np.isin(remaining_points, best_inliers).all(axis=1)]
 
     return planes, masks, norms
