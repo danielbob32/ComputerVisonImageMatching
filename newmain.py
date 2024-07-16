@@ -4,6 +4,8 @@ import cv2
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import os
+from sklearn.linear_model import LinearRegression
+
 def load_data(data_dir):
     img1 = cv2.imread(os.path.join(data_dir, 'I1.png'), cv2.IMREAD_GRAYSCALE)
     if img1 is None:
@@ -80,16 +82,16 @@ def drawlines(img1, img2, lines1, lines2, pts1, pts2):
     plt.show()
     
 
-def fit_plane(p1, p2, p3):
-    # Create vectors from points
-    v1 = p2 - p1
-    v2 = p3 - p1
-    # Compute the cross product to get the normal to the plane
-    cp = np.cross(v1, v2)
-    a, b, c = cp
-    # This gives us the coefficients of the plane equation: ax + by + cz + d = 0
-    d = -np.dot(cp, p1)
-    return a, b, c, d
+# def fit_plane(p1, p2, p3):
+#     # Create vectors from points
+#     v1 = p2 - p1
+#     v2 = p3 - p1
+#     # Compute the cross product to get the normal to the plane
+#     cp = np.cross(v1, v2)
+#     a, b, c = cp
+#     # This gives us the coefficients of the plane equation: ax + by + cz + d = 0
+#     d = -np.dot(cp, p1)
+#     return a, b, c, d
 
 def distance_from_plane(point, coefficients):
     a, b, c, d = coefficients
@@ -99,47 +101,85 @@ def distance_from_plane(point, coefficients):
     num = abs(a * point[0] + b * point[1] + c * point[2] + d)
     return num / den
 
-def sequential_ransac(points, num_planes=2, max_trials=20000, inlier_threshold=0.0006):
-    min_inliers = 100
-    remaining_mask = np.ones(len(points), dtype=bool)  # Initially, all points are available
+def sequential_ransac(points, num_planes=2, max_trials=200, inlier_threshold=0.0001):
+    remaining_points = points.copy()
     planes = []
     norms = []
-    masks = []  # To store masks of inliers for each plane
+    masks = []
 
-    for plane_index in range(num_planes):
-        print(f"Detecting plane {plane_index + 1}...")
-        print(f"Number of remaining points: {np.sum(remaining_mask)}")
-   
-        if np.count_nonzero(remaining_mask) < min_inliers:
-            print("Not enough points to form a plane.")
+    for _ in range(num_planes):
+        if len(remaining_points) < 4:  # Need at least 4 points to fit a plane
             break
 
-        best_inliers = np.zeros(len(points), dtype=bool)
+        best_inliers = []
         best_plane = None
+        best_num_inliers = 0
 
         for _ in range(max_trials):
-            indices = np.random.choice(np.where(remaining_mask)[0], 3, replace=False)
-            sample = points[indices]
+            # Sample 3 points
+            sample = remaining_points[np.random.choice(len(remaining_points), 3, replace=False)]
             plane_coeffs = fit_plane(*sample)
 
-            distances = np.array([distance_from_plane(pt, plane_coeffs) for pt in points])
-            inliers = distances < inlier_threshold
+            # Calculate distances
+            distances = np.array([distance_from_plane(pt, plane_coeffs) for pt in remaining_points])
 
-            if inliers.sum() > best_inliers.sum():
-                best_inliers = inliers
-                best_plane = plane_coeffs
+            # Use adaptive threshold if not specified
+            if inlier_threshold is None:
+                threshold = np.mean(distances) * 0.5
+            else:
+                threshold = inlier_threshold
+
+            # Find inliers
+            inliers = remaining_points[distances < threshold]
+
+            # Refine the plane if we found more inliers
+            if len(inliers) > best_num_inliers:
+                refined_coeffs = refine_plane(inliers)
+                refined_distances = np.array([distance_from_plane(pt, refined_coeffs) for pt in remaining_points])
+                refined_inliers = remaining_points[refined_distances < threshold]
+
+                if len(refined_inliers) > best_num_inliers:
+                    best_inliers = refined_inliers
+                    best_plane = refined_coeffs
+                    best_num_inliers = len(refined_inliers)
 
         if best_plane is None:
-            print("No valid plane found for this iteration.")
             break
 
-        print(f"Plane {plane_index + 1} found with {np.sum(best_inliers)} inliers.")
-        planes.append(points[best_inliers])
+        planes.append(best_inliers)
         norms.append(best_plane[:3])
-        masks.append(best_inliers)
-        remaining_mask &= ~best_inliers  # Properly exclude inliers of this plane
+        mask = np.array([np.any(np.all(p == best_inliers, axis=1)) for p in points])
+        masks.append(mask)
+
+        # Remove inliers from remaining points
+        remaining_points = remaining_points[~np.isin(remaining_points, best_inliers).all(axis=1)]
 
     return planes, masks, norms
+
+def fit_plane(p1, p2, p3):
+    v1 = p2 - p1
+    v2 = p3 - p1
+    cp = np.cross(v1, v2)
+    a, b, c = cp
+    d = -np.dot(cp, p1)
+    return a, b, c, d
+
+# def distance_from_plane(point, coefficients):
+#     a, b, c, d = coefficients
+#     numerator = abs(a * point[0] + b * point[1] + c * point[2] + d)
+#     denominator = np.sqrt(a**2 + b**2 + c**2)
+#     return numerator / denominator
+
+def refine_plane(points):
+    # Use least squares to refine the plane equation
+    X = points[:, :2]
+    y = points[:, 2]
+    reg = LinearRegression().fit(X, y)
+    a, b = reg.coef_
+    c = -1  # We assume the plane equation is of the form z = ax + by + d
+    d = reg.intercept_
+    return a, b, c, d
+
 
 def main():
     data_dir = 'data/reference'
@@ -159,7 +199,7 @@ def main():
     matches = sorted(matches, key=lambda x: x[0].distance)
     good = []
     for m, n in matches:
-        if m.distance < 0.9 * n.distance:
+        if m.distance < 0.75 * n.distance:
             good.append(m)
     matches = good
     draw_matches(img1, keypoints1, img2, keypoints2, matches, num_matches)
@@ -178,7 +218,7 @@ def main():
     lines1 = cv2.computeCorrespondEpilines(pts2.reshape(-1, 1, 2), 2, F)
     lines1 = lines1.reshape(-1, 3)
     drawlines(img1, img2, lines1, lines2, pts1[:num_matches], pts2[:num_matches])
-
+    
     pts1_undistorted = cv2.undistortPoints(pts1, K, None)
     pts2_undistorted = cv2.undistortPoints(pts2, K, None)
 
@@ -207,7 +247,7 @@ def main():
     plt.show()
     
     num_planes = 2
-    points = np.random.rand(1000,3)
+   
     planes, masks, normals = sequential_ransac(points_3d.T, num_planes)
 
     fig, axes = plt.subplots(1, 2, figsize=(20, 10))
@@ -274,33 +314,37 @@ def main():
     plt.legend()
     plt.show()
 
-    fig, axes = plt.subplots(1, 2, figsize=(20, 10))
-    axes[0].imshow(img1, cmap='gray')
-    axes[0].set_title('Image 1 with Plane Normals')
-    axes[1].imshow(img2, cmap='gray')
-    axes[1].set_title('Image 2 with Plane Normals')
+    # New plane normal visualization
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 10))
+    ax1.imshow(img1, cmap='gray')
+    ax1.set_title('Image 1 with Plane Normals')
+    ax2.imshow(img2, cmap='gray')
+    ax2.set_title('Image 2 with Plane Normals')
 
     scale = 50
     colors = ['blue', 'cyan']
     for i, (inliers, mask, normal) in enumerate(zip(planes, masks, normals)):
         projected_points_img1 = pts1[mask]
         projected_points_img2 = pts2[mask]
-        
         for pt in projected_points_img1:
             pt = np.round(pt).astype(int)
             if 0 <= pt[1] < img1.shape[0] and 0 <= pt[0] < img1.shape[1]:
-                axes[0].arrow(pt[0], pt[1], scale * normal[0], scale * normal[1], 
-                            color=colors[i], width=1, head_width=5, head_length=5)
-
+                ax1.plot([pt[0], pt[0] + scale * normal[0]], 
+                         [pt[1], pt[1] + scale * normal[1]], 
+                         color=colors[i], linewidth=1, solid_capstyle='round')
         for pt in projected_points_img2:
             pt = np.round(pt).astype(int)
             if 0 <= pt[1] < img2.shape[0] and 0 <= pt[0] < img2.shape[1]:
-                axes[1].arrow(pt[0], pt[1], scale * normal[0], scale * normal[1], 
-                            color=colors[i], width=1, head_width=5, head_length=5)
-    for ax in axes:
+                ax2.plot([pt[0], pt[0] + scale * normal[0]], 
+                         [pt[1], pt[1] + scale * normal[1]], 
+                         color=colors[i], linewidth=1, solid_capstyle='round')
+    for ax in (ax1, ax2):
         ax.axis('off')
     plt.tight_layout()
     plt.show()
+
+
+
 
 if __name__ == '__main__':
     main()
