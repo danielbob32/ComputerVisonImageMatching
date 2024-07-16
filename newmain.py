@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import os
 from sklearn.linear_model import LinearRegression
+from sklearn.neighbors import KDTree
 
 def load_data(data_dir):
     img1 = cv2.imread(os.path.join(data_dir, 'I1.png'), cv2.IMREAD_GRAYSCALE)
@@ -146,10 +147,10 @@ def sequential_ransac(points, num_planes=2, max_trials=200, inlier_threshold=0.0
 def fit_plane(p1, p2, p3):
     v1 = p2 - p1
     v2 = p3 - p1
-    cp = np.cross(v1, v2)
-    a, b, c = cp
-    d = -np.dot(cp, p1)
-    return a, b, c, d
+    normal = np.cross(v1, v2)
+    normal = normal / np.linalg.norm(normal)  # Normalize the normal vector
+    d = -np.dot(normal, p1)
+    return normal[0], normal[1], normal[2], d
 
 # def distance_from_plane(point, coefficients):
 #     a, b, c, d = coefficients
@@ -224,19 +225,26 @@ def main():
     print("Shape of points_3d:", points_3d.shape)
     print("Number of 3D points reconstructed:", points_3d.shape[1])
     
+    # Normalize points to desired range
+    points_3d_normalized = points_3d.copy()
+    points_3d_normalized[0] = (points_3d[0] - np.min(points_3d[0])) / (np.max(points_3d[0]) - np.min(points_3d[0])) * 20 - 10
+    points_3d_normalized[1] = (points_3d[1] - np.min(points_3d[1])) / (np.max(points_3d[1]) - np.min(points_3d[1])) * 20 - 10
+    points_3d_normalized[2] = (points_3d[2] - np.min(points_3d[2])) / (np.max(points_3d[2]) - np.min(points_3d[2])) * 40
+    
+    
     fig = plt.figure(figsize=(10, 8))
     ax = fig.add_subplot(111, projection='3d')
-    ax.scatter(points_3d[0], points_3d[1], points_3d[2], c='b', marker='o')
+    ax.scatter(points_3d_normalized[0], points_3d_normalized[1], points_3d_normalized[2], c='b', marker='o')
     ax.set_xlabel('X')
     ax.set_ylabel('Y')
     ax.set_zlabel('Z')
-    plt.title(f'3D Reconstruction Cloud ({points_3d.shape[1]} points)')
+    plt.title(f'3D Reconstruction Cloud ({points_3d_normalized.shape[1]} points)')
     plt.show()
     
     num_planes = 2
    
     planes, masks, normals = sequential_ransac(points_3d.T, num_planes)
-
+    
     fig, axes = plt.subplots(1, 2, figsize=(20, 10))
     axes[0].imshow(img1, cmap='gray')
     axes[0].set_title('Image 1 with Colored Planes')
@@ -262,7 +270,7 @@ def main():
         ax.axis('off')
     plt.show()
     
-    #draw rectangle of the assumed planes
+    #draw rectangle of the assumed planes 
     fig, axes = plt.subplots(1, 2, figsize=(20, 10))
     axes[0].imshow(img1, cmap='gray')
     axes[0].set_title('Image 1 with Planes')
@@ -286,6 +294,21 @@ def main():
         ax.axis('off')
     plt.show()
     
+    
+    # print the normals of the planes
+    for i, normal in enumerate(normals):
+        print(f"Plane {i + 1} normal: {normal}")
+        
+    # print the planes coefficients
+    for i, plane in enumerate(planes):
+        print(f"Plane {i + 1} coefficients: {plane}")
+    
+    # calculate the normal of the planes
+    for i, plane in enumerate(planes):
+        print(f"Plane {i + 1} normal: {plane[:3] / np.linalg.norm(plane[:3])}")
+    
+    
+    
     fig = plt.figure(figsize=(10, 8))
     ax = fig.add_subplot(111, projection='3d')
 
@@ -301,6 +324,42 @@ def main():
     plt.legend()
     plt.show()
 
+
+
+
+
+    def estimate_normals(points, k=10):
+        # Use k-nearest neighbors to estimate normals
+        tree = KDTree(points)
+        _, indices = tree.query(points, k=k)
+        
+        normals = []
+        for neighbors in indices:
+            cov = np.cov(points[neighbors].T)
+            eigenvalues, eigenvectors = np.linalg.eig(cov)
+            normal = eigenvectors[:, np.argmin(eigenvalues)]
+            normals.append(normal)
+        
+        return np.array(normals)
+
+    # In the main function:
+    normals = estimate_normals(points_3d.T)
+
+    # Adjust normals to be more aligned with principal directions
+    def adjust_normal(normal):
+        abs_normal = np.abs(normal)
+        max_index = np.argmax(abs_normal)
+        adjusted = np.zeros_like(normal)
+        adjusted[max_index] = np.sign(normal[max_index])
+        return adjusted
+
+    adjusted_normals = np.apply_along_axis(adjust_normal, 1, normals)
+
+    # Use these adjusted normals in the visualization
+
+
+
+
     # New plane normal visualization
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 10))
     ax1.imshow(img1, cmap='gray')
@@ -310,7 +369,7 @@ def main():
 
     scale = 50
     colors = ['blue', 'cyan']
-    for i, (inliers, mask, normal) in enumerate(zip(planes, masks, normals)):
+    for i, (inliers, mask, normal) in enumerate(zip(planes, masks, adjusted_normals)):
         projected_points_img1 = pts1[mask]
         projected_points_img2 = pts2[mask]
         for pt in projected_points_img1:
