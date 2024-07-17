@@ -1,12 +1,11 @@
 #%%
-import cv2
 import numpy as np
+import cv2
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
-from sklearn.linear_model import RANSACRegressor
-from sklearn.preprocessing import PolynomialFeatures
-from sklearn.cluster import DBSCAN
 import os
+from sklearn.linear_model import LinearRegression
+from sklearn.neighbors import KDTree
 
 def load_data(data_dir):
     img1 = cv2.imread(os.path.join(data_dir, 'I1.png'), cv2.IMREAD_GRAYSCALE)
@@ -82,18 +81,9 @@ def drawlines(img1, img2, lines1, lines2, pts1, pts2):
     for pt2 in pts2:
         axes[1].plot(pt2[0], pt2[1], 'go', markersize=7, markerfacecolor='none', markeredgewidth=1)
     plt.show()
+    
 
 
-def fit_plane(p1, p2, p3):
-    # Create vectors from points
-    v1 = p2 - p1
-    v2 = p3 - p1
-    # Compute the cross product to get the normal to the plane
-    cp = np.cross(v1, v2)
-    a, b, c = cp
-    # This gives us the coefficients of the plane equation: ax + by + cz + d = 0
-    d = -np.dot(cp, p1)
-    return a, b, c, d
 
 def distance_from_plane(point, coefficients):
     a, b, c, d = coefficients
@@ -103,44 +93,90 @@ def distance_from_plane(point, coefficients):
     num = abs(a * point[0] + b * point[1] + c * point[2] + d)
     return num / den
 
-
-def sequential_ransac(points, num_planes=2, max_trials=5000, inlier_threshold=0.0006):
+def sequential_ransac(points, num_planes=2, max_trials=200, inlier_threshold=0.0001):
     remaining_points = points.copy()
-    remaining_mask = np.ones(len(points), dtype=bool)  # Initially, all points are available
     planes = []
     norms = []
-    masks = []  # To store masks of inliers for each plane
+    masks = []
 
     for _ in range(num_planes):
-        if np.count_nonzero(remaining_mask) < 3:
-            print("Not enough points to form a plane.")
+        if len(remaining_points) < 4:
             break
 
-        best_inliers = np.zeros(len(points), dtype=bool)
+        best_inliers = []
         best_plane = None
+        best_num_inliers = 0
 
         for _ in range(max_trials):
-            indices = np.random.choice(np.where(remaining_mask)[0], 3, replace=False)
-            sample = points[indices]
+            sample = remaining_points[np.random.choice(len(remaining_points), 3, replace=False)]
             plane_coeffs = fit_plane(*sample)
+            distances = np.array([distance_from_plane(pt, plane_coeffs) for pt in remaining_points])
+            inliers = remaining_points[distances < inlier_threshold]
 
-            # Calculate distances for all points
-            distances = np.array([distance_from_plane(pt, plane_coeffs) for pt in points])
-            inliers = distances < inlier_threshold
+            if len(inliers) > best_num_inliers:
+                refined_coeffs = refine_plane(inliers)
+                refined_distances = np.array([distance_from_plane(pt, refined_coeffs) for pt in remaining_points])
+                refined_inliers = remaining_points[refined_distances < inlier_threshold]
 
-            # Update best model if more inliers are found
-            if inliers.sum() > best_inliers.sum():
-                best_inliers = inliers
-                best_plane = plane_coeffs
+                if len(refined_inliers) > best_num_inliers:
+                    best_inliers = refined_inliers
+                    best_plane = refined_coeffs
+                    best_num_inliers = len(refined_inliers)
 
-        planes.append(points[best_inliers])
-        norms.append(best_plane[:3])
-        masks.append(best_inliers)
-        remaining_mask &= ~best_inliers
+        if best_plane is None:
+            break
+
+        planes.append(best_inliers)
+        norms.append(best_plane[:3] / np.linalg.norm(best_plane[:3]))  # Normalize the normal vector
+        mask = np.array([np.any(np.all(p == best_inliers, axis=1)) for p in points])
+        masks.append(mask)
+
+        remaining_points = remaining_points[~np.isin(remaining_points, best_inliers).all(axis=1)]
 
     return planes, masks, norms
 
+def fit_plane(p1, p2, p3):
+    v1 = p2 - p1
+    v2 = p3 - p1
+    normal = np.cross(v1, v2)
+    normal = normal / np.linalg.norm(normal)  # Normalize the normal vector
+    d = -np.dot(normal, p1)
+    return normal[0], normal[1], normal[2], d
 
+
+def refine_plane(points):
+    # Use least squares to refine the plane equation
+    X = points[:, :2]
+    y = points[:, 2]
+    reg = LinearRegression().fit(X, y)
+    a, b = reg.coef_
+    c = -1  # We assume the plane equation is of the form z = ax + by + d
+    d = reg.intercept_
+    return a, b, c, d
+
+# Adjust normals to be more aligned with principal directions
+def adjust_normal(normal):
+    abs_normal = np.abs(normal)
+    max_index = np.argmax(abs_normal)
+    adjusted = np.zeros_like(normal)
+    adjusted[max_index] = np.sign(normal[max_index])
+    return adjusted
+
+
+
+def estimate_normals(points, k=10):
+    # Use k-nearest neighbors to estimate normals
+    tree = KDTree(points)
+    _, indices = tree.query(points, k=k)
+    
+    normals = []
+    for neighbors in indices:
+        cov = np.cov(points[neighbors].T)
+        eigenvalues, eigenvectors = np.linalg.eig(cov)
+        normal = eigenvectors[:, np.argmin(eigenvalues)]
+        normals.append(normal)
+    
+    return np.array(normals)
 
 def main():
     data_dir = 'data/reference'
@@ -160,7 +196,7 @@ def main():
     matches = sorted(matches, key=lambda x: x[0].distance)
     good = []
     for m, n in matches:
-        if m.distance < 0.9 * n.distance:
+        if m.distance < 0.75 * n.distance:
             good.append(m)
     matches = good
     draw_matches(img1, keypoints1, img2, keypoints2, matches, num_matches)
@@ -179,30 +215,46 @@ def main():
     lines1 = cv2.computeCorrespondEpilines(pts2.reshape(-1, 1, 2), 2, F)
     lines1 = lines1.reshape(-1, 3)
     drawlines(img1, img2, lines1, lines2, pts1[:num_matches], pts2[:num_matches])
-
+    
     pts1_undistorted = cv2.undistortPoints(pts1, K, None)
     pts2_undistorted = cv2.undistortPoints(pts2, K, None)
 
     points, R, t, mask = cv2.recoverPose(E, pts1_undistorted, pts2_undistorted, K)
     P1 = np.hstack((K, np.zeros((3, 1))))
+    print(K)
     P2 = np.dot(K, np.hstack((R, t)))
+    
     print("Camera Matrix P1:\n", P1)
     print("\nCamera Matrix P2:\n", P2)
+    
     points_4d = cv2.triangulatePoints(P1, P2, pts1_undistorted.reshape(-1, 2).T, pts2_undistorted.reshape(-1, 2).T)
+    print("example of a point in 4d:", points_4d[:, 0])
     points_3d = points_4d[:3] / points_4d[3]
+
+    print("Shape of points_4d:", points_4d.shape)
+    print("Shape of points_3d:", points_3d.shape)
+    print("Number of 3D points reconstructed:", points_3d.shape[1])
+    
+    # Normalize points to desired range
+    points_3d_normalized = points_3d.copy()
+    points_3d_normalized[0] = (points_3d[0] - np.min(points_3d[0])) / (np.max(points_3d[0]) - np.min(points_3d[0])) * 20 - 10
+    points_3d_normalized[1] = (points_3d[1] - np.min(points_3d[1])) / (np.max(points_3d[1]) - np.min(points_3d[1])) * 20 - 10
+    points_3d_normalized[2] = (points_3d[2] - np.min(points_3d[2])) / (np.max(points_3d[2]) - np.min(points_3d[2])) * 40
+    
+    
     fig = plt.figure(figsize=(10, 8))
     ax = fig.add_subplot(111, projection='3d')
-    ax.scatter(points_3d[0], points_3d[1], points_3d[2], c='b', marker='o')
-
-    ax.set_xlabel('X Label')
-    ax.set_ylabel('Y Label')
-    ax.set_zlabel('Z Label')
-    plt.title('3D Reconstruction Cloud from Matches')
+    ax.scatter(points_3d_normalized[0], points_3d_normalized[1], points_3d_normalized[2], c='b', marker='o')
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    plt.title(f'3D Reconstruction Cloud ({points_3d_normalized.shape[1]} points)')
     plt.show()
-
+    
     num_planes = 2
+   
     planes, masks, normals = sequential_ransac(points_3d.T, num_planes)
-
+    
     fig, axes = plt.subplots(1, 2, figsize=(20, 10))
     axes[0].imshow(img1, cmap='gray')
     axes[0].set_title('Image 1 with Colored Planes')
@@ -226,8 +278,46 @@ def main():
 
     for ax in axes:
         ax.axis('off')
-
     plt.show()
+    
+    #draw rectangle of the assumed planes 
+    fig, axes = plt.subplots(1, 2, figsize=(20, 10))
+    axes[0].imshow(img1, cmap='gray')
+    axes[0].set_title('Image 1 with Planes')
+    axes[1].imshow(img2, cmap='gray')
+    axes[1].set_title('Image 2 with Planes')
+    
+    for i, inliers in enumerate(planes):
+        mask = masks[i]
+        projected_points_img1 = pts1[mask]
+        projected_points_img2 = pts2[mask]
+        min_x, min_y = np.min(projected_points_img1, axis=0)
+        max_x, max_y = np.max(projected_points_img1, axis=0)
+        rect = plt.Rectangle((min_x, min_y), max_x - min_x, max_y - min_y, linewidth=1, edgecolor='r', facecolor='none')
+        axes[0].add_patch(rect)
+        min_x, min_y = np.min(projected_points_img2, axis=0)
+        max_x, max_y = np.max(projected_points_img2, axis=0)
+        rect = plt.Rectangle((min_x, min_y), max_x - min_x, max_y - min_y, linewidth=1, edgecolor='b', facecolor='none')
+        axes[1].add_patch(rect)
+        
+    for ax in axes:
+        ax.axis('off')
+    plt.show()
+    
+    
+    # print the normals of the planes
+    for i, normal in enumerate(normals):
+        print(f"Plane {i + 1} normal: {normal}")
+        
+    # print the planes coefficients
+    for i, plane in enumerate(planes):
+        print(f"Plane {i + 1} coefficients: {plane}")
+    
+    # calculate the normal of the planes
+    for i, plane in enumerate(planes):
+        print(f"Plane {i + 1} normal: {plane[:3] / np.linalg.norm(plane[:3])}")
+    
+    
     
     fig = plt.figure(figsize=(10, 8))
     ax = fig.add_subplot(111, projection='3d')
@@ -244,26 +334,52 @@ def main():
     plt.legend()
     plt.show()
 
-    
+
+
+
+
+    # In the main function:
+    normals = estimate_normals(points_3d.T)
+    adjusted_normals = np.apply_along_axis(adjust_normal, 1, normals)
+
+    # Use these adjusted normals in the visualization
+
+
+
+
+    # New plane normal visualization
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 10))
+    ax1.imshow(img1, cmap='gray')
+    ax1.set_title('Image 1 with Plane Normals')
+    ax2.imshow(img2, cmap='gray')
+    ax2.set_title('Image 2 with Plane Normals')
+
+    scale = 50
     colors = ['blue', 'cyan']
-    for i, (inliers, mask, normal) in enumerate(zip(planes, masks, normals)):
+    for i, (inliers, mask, normal) in enumerate(zip(planes, masks, adjusted_normals)):
         projected_points_img1 = pts1[mask]
         projected_points_img2 = pts2[mask]
         for pt in projected_points_img1:
             pt = np.round(pt).astype(int)
             if 0 <= pt[1] < img1.shape[0] and 0 <= pt[0] < img1.shape[1]:
-                axes[0].scatter(pt[0], pt[1], color=colors[i], s=10, alpha=0.7)
-                end_point = (pt[0] + scale * normal[0], pt[1] + scale * normal[1])
-                axes[0].plot([pt[0], end_point[0]], [pt[1], end_point[1]], color=colors[i], linewidth=2)
+                ax1.plot([pt[0], pt[0] + scale * normal[0]], 
+                         [pt[1], pt[1] + scale * normal[1]], 
+                         color=colors[i], linewidth=1, solid_capstyle='round')
         for pt in projected_points_img2:
             pt = np.round(pt).astype(int)
             if 0 <= pt[1] < img2.shape[0] and 0 <= pt[0] < img2.shape[1]:
-                axes[1].scatter(pt[0], pt[1], color=colors[i], s=10, alpha=0.7)
-                end_point = (pt[0] + scale * normal[0], pt[1] + scale * normal[1])
-                axes[1].plot([pt[0], end_point[0]], [pt[1], end_point[1]], color=colors[i], linewidth=2)
-    for ax in axes:
+                ax2.plot([pt[0], pt[0] + scale * normal[0]], 
+                         [pt[1], pt[1] + scale * normal[1]], 
+                         color=colors[i], linewidth=1, solid_capstyle='round')
+    for ax in (ax1, ax2):
         ax.axis('off')
+    plt.tight_layout()
     plt.show()
+
+
+
 
 if __name__ == '__main__':
     main()
+
+# %%
