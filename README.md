@@ -2,8 +2,9 @@
 
 Welcome to the **3D Reconstruction and Plane Detection** project! This repository contains a Python script that performs 3D reconstruction from stereo images using epipolar geometry. It detects keypoints, matches them between images, computes the Fundamental and Essential matrices, reconstructs a 3D point cloud, and fits planes to the reconstructed points using RANSAC.
 
-![filtered matching points based on epi lines](https://github.com/user-attachments/assets/af670775-93b9-4745-93a1-d3145ce1efac)
-![Detected Planes with vector](https://github.com/user-attachments/assets/639179dd-c09f-4a3c-be43-d0c1c408ea8f)
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/639179dd-c09f-4a3c-be43-d0c1c408ea8f" alt="Detected Planes with Vector" width="600">
+</p>
 
 ## Introduction
 
@@ -74,45 +75,51 @@ python main.py
 
 The script will display various plots:
 
-📷 Keypoints detected in both images
-🔍 Matched features between images
-📏 Matches with connecting lines
-📐 Epipolar lines corresponding to the matches
-🛰️ Planes fitted to the 3D point cloud
-🧭 Normals of the detected planes projected onto the images
-Example Results
-Keypoint Detection
+- 📷 Keypoints detected in both images
+- 🔍 Matched features between images
+- 📏 Matches with connecting lines
+- 📐 Epipolar lines corresponding to the matches
+- 🛰️ Planes fitted to the 3D point cloud
+- 🧭 Normals of the detected planes projected onto the images
+  
+## Example Results
+### Keypoint Detection
+<p align="center"> <img src="https://github.com/user-attachments/assets/e13fbf73-0f07-41c2-9a3b-cdef1cf6f6c8" alt="Keypoint Detection" width="600"> </p>
 
-Feature Matching
+### Feature Matching
+<p align="center"> <img src="https://github.com/user-attachments/assets/4944b31f-5f93-45a4-a85a-0d91df5c5c84" alt="Feature Matching" width="600"> </p>
 
-Epipolar Lines
+### Epipolar Lines
+<p align="center"> <img src="https://github.com/user-attachments/assets/5820235a-10ce-4d78-90ab-c1461cd84505" alt="Epipolar Lines" width="600"> </p>
 
-Plane Detection
+### Plane Detection
+<p align="center"> <img src="https://github.com/user-attachments/assets/521da56d-ab54-4388-92f5-89af64c0373f" alt="Plane Detection" width="600"> </p>
 
-Normals Projection
+### Normals Projection
+<p align="center"> <img src="https://github.com/user-attachments/assets/b706edb1-90fd-4daa-9a21-f19868265165" alt="Normals Projection" width="600"> </p>
 
 Note: The results directory should contain the generated images from running the script.
 
-Project Structure
-your_script_name.py: Main Python script containing all functions and the main() function.
-data/: Directory containing sample images and camera matrix.
-I1.png: First stereo image.
-I2.png: Second stereo image.
-K.txt: Camera intrinsic matrix.
-results/: Directory where output images and plots are saved.
-README.md: Project documentation.
-Contributing
+## Project Structure
+```
+- main.py: Main Python script containing all functions and the main() function.
+- data/: Directory containing sample images and camera matrix.
+- results/: Directory where output images and plots are saved.
+- README.md: Project documentation.
+```
+## Contributing
 Contributions are welcome! If you have suggestions for improvements or new features, feel free to open an issue or submit a pull request.
 
-Fork the repository.
-Create your feature branch: git checkout -b feature/YourFeature
-Commit your changes: git commit -am 'Add some feature'
-Push to the branch: git push origin feature/YourFeature
-Open a pull request.
-License
+1. Fork the repository.
+2. Create your feature branch: git checkout -b feature/YourFeature
+3. Commit your changes: git commit -am 'Add some feature'
+4. Push to the branch: git push origin feature/YourFeature
+5. Open a pull request.
+
+## License
 This project is licensed under the MIT License - see the LICENSE file for details.
 
-Contact
+## Contact
 For questions or suggestions, please contact Daniel Bobritski:
 
 📧 Email: danielbob32@gmail.com
